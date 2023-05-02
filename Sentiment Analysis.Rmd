@@ -1,0 +1,1090 @@
+---
+title: "Airline Data Analysis"
+author: "El-hakim Joseph Solomon"
+date: "29 January 2021"
+output: html_document
+  
+---
+The aim is to analyse the tweets’ and provide insights into the general trends and patterns of tweets addressed to both airlines in the dataset
+
+```{r setup, include=FALSE}
+#Echo is set to TRUE to display code and results in the finished file
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Relevant libraries for this task are loaded below
+
+```{r}
+library(ggplot2) #Visualizations
+library(gridExtra) #Viewing Multiple Plots Together
+library(dplyr) #Data Manipulation
+library(tidytext) #Text Mining
+library(wordcloud2) #Creative Visualizations
+library(tm) #Text Mining
+library(anytime) #Time Conversion
+library(RColorBrewer) #Required for color palettes
+library(tidyr) #To tidy data
+library(radarchart) #Visualizations
+library(topicmodels)#Topic Modelling
+library(magrittr)
+```
+
+The first task for this analysis is Text Mining and the series of codes below sets out achieve that (Task A – Text Mining)
+
+                                                                      Read in the Data
+```{r}
+#Read in AirlineData
+AirlineData <- read.csv("airline.csv")
+```
+
+```{r}
+#View Dataset Columns
+names(AirlineData)
+```
+```{r}
+#Facts about the Dataset
+summary(AirlineData)
+```
+```{r}
+#Number of Rows and Columns 
+dim(AirlineData)
+```
+```{r}
+#Check for Missing Record
+sum(is.na(AirlineData))
+```
+
+The chunk of code below shows the number of tweets for each airline in the dataset.
+There are more tweet observations for Untited Airline than for Virgin America.
+```{r}
+# Number of tweets by Airline
+ AirlineData %>% 
+   group_by(airline) %>%
+   na.omit() %>% 
+   count() %>%
+   ungroup() %>% 
+   arrange(desc(n))
+```
+
+A new dataframe is creaed with the column text renamed to tweets and the tweet_created converted to 'Date' object
+```{r}
+Airline <- AirlineData %>%
+  #Select() allows renaming of colums
+  select(X, tweet_id, sentiment, airline, retweet_count, tweets = text, tweet_created, tweet_location, user_timezone) %>%
+  #Convert to Date object
+  mutate(tweet_time = anytime(AirlineData$tweet_created))
+Airline
+```
+
+Looking at the tweets column to see how one of the tweet is structured
+```{r}
+#Tweet Structure
+str(Airline[264,]$tweets, nchar.max = 500)
+```
+
+                                                              Data Conditioning - Basic cleaning segment
+
+Contrations in the tweets are fixed
+```{r}
+# function to expand contractions in an English-language source
+fix.contractions <- function(data) {
+  data <- gsub("won't", "will not", data)
+  data <- gsub("can't", "can not", data)
+  data <- gsub("n't", " not", data)
+  data <- gsub("'ll", " will", data)
+  data <- gsub("'re", " are", data)
+  dota <- gsub("'ve", " have", data)
+  data <- gsub("'m", " am", data)
+  data <- gsub("'d", " would", data)
+  data <- gsub("'em", " them", data)
+  data <- gsub("'tis", " it is", data)
+  data <- gsub("o'clock", "of the clock", data)
+  data <- gsub("'cause", " because", data) 
+# 's could be 'is' or could be possessive: it has no expansion
+  data <- gsub("'s", "", data)
+  return(data)
+}
+# expand contractions
+Airline$tweets <- sapply(Airline$tweets, fix.contractions)
+```
+
+
+```{r}
+#function to remove URLs
+removeURL <- function(x) gsub("http[^[:space:]]*", "", x)
+# remove URLS
+Airline$tweets <- sapply(Airline$tweets, removeURL)
+```
+
+It is critical to expand contractions before removing special characters
+```{r}
+# function to remove special characters
+removeSpecialChars <- function(x) gsub("[^a-zA-Z0-9 ]", " ", x)
+# remove special characters
+Airline$tweets <- sapply(Airline$tweets, removeSpecialChars)
+```
+
+
+```{r}
+# remove numbers
+Airline$tweets <- sapply(Airline$tweets, removeNumbers)
+# remove punctuation
+Airline$tweets <- sapply(Airline$tweets, removePunctuation)
+# remove leading and/or trailing whitespace
+Airline$tweets <- sapply(Airline$tweets, trimws)
+# convert everything to lower case
+Airline$tweets <- sapply(Airline$tweets, tolower)
+```
+
+Re-examine tweet to see difference after cleaning
+```{r}
+str(Airline[264, ]$tweets, nchar.max = 500)
+```
+                                                                            
+                                                                            Text Mining
+                                                      
+Below is a list of superfluous words that need to be removed manually. The airlines are removed because they are not neccesary for the required analysis
+```{r}
+undesirable_words <- c("united", "virgin america", "ua", "va","ve", "virginamerica")
+```
+
+To begin the analysis, the tweets need to be broken into individual words to begin mining for insights. This process is called tokenization.
+To unnest the tokens, the tidytext library which has already been loaded is utilized. Noext, the dplyr's capabilities is used to join several steps together.
+The steps taken to do this is explained below:
+
+From the tidytext framework, you need to both break the text into individual tokens (tokenization) and transform it to a tidy data structure. To do this, utilise tidytext's unnest_tokens() function. unnest_tokens() requires at least two arguments: the output column name that will be created as the text is unnested into it ("word", in this case), and the input column that holds the current text (tweets).
+
+You can take the Airline dataset and pipe it into unnest_tokens() and then remove stop words. Stop words are the overly common words that may not add any meaning to our results. The lexicon called stop_words from the tidytext package is the list utilised for this.
+
+After you tokenize the tweets into words, you can then use dplyr's anti_join() to remove stop words. Next, remove the undesirable words that were defined earlier using dplyr's filter() verb with the %in% operator.
+
+```{r}
+Airline_tweets_filtered <- Airline %>%
+  unnest_tokens(word, tweets) %>%
+  anti_join(stop_words) %>%
+  filter(!word %in% undesirable_words)
+Airline_tweets_filtered
+```
+
+
+```{r}
+class(Airline_tweets_filtered)
+```
+
+Airline_tweets_filtered is a data frame with 21175 total words and 10 columns
+```{r}
+dim(Airline_tweets_filtered)
+```
+
+The most frequently used words in the tweets
+```{r}
+#Frequent words used in tweets 
+Frequentwords <- Airline_tweets_filtered %>%
+  count(word, airline, sort = TRUE) %>%
+  group_by(airline) %>% 
+  top_n(10) %>%
+  ungroup() %>% 
+  mutate(word_reorder = reorder(word, n))
+Frequentwords
+```
+
+Colors defined by  their hexadecimal code representation  to be used in plotting id displayed below
+```{r}
+#Define some colors
+my_colors <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#D55E00")
+```
+
+
+```{r}
+#Frequentwords plot
+ggplot(Frequentwords, aes(x = word_reorder, y = n, fill = airline)) +
+  geom_col(show.legend = FALSE, fill = my_colors[1]) +
+  facet_wrap(~airline, scales = "free") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("") + 
+    ylab("Word Count") +
+    ggtitle("Most Frequently Used Words in tweets") +
+  coord_flip()
+```
+
+The importance of words can be illustrated as a word cloud as follow :
+
+```{r}
+Airline_tweets_counts <- Airline_tweets_filtered %>%
+  count(word, sort = TRUE) 
+
+wordcloud2(Airline_tweets_counts[1:1000, ], size = 1.5, backgroundColor = "white", minRotation = 1,  minSize = 10, color=brewer.pal(8, "Dark2"))
+```
+The size of the words in the word cloud is dependent on its frequency
+                    
+                    
+                                                                 Word Length
+The length of words used in tweets:                                                   
+```{r}
+# Word length 
+Airline_tweets_lengths <- Airline %>%
+  #Format date and extract the day from tweet_time into a new column called day
+  mutate(day = format(as.POSIXct(tweet_time, format = "%y/%m/%d %H:%M:%S"), "%d")) %>%
+  unnest_tokens(word, tweets) %>%
+  group_by(airline, day) %>%
+  distinct() %>%
+  filter(!word %in% undesirable_words) %>%
+  mutate(word_length = nchar(word))
+Airline_tweets_lengths
+```
+
+
+```{r}
+# Plot word length in tweet against count 
+Airline_tweets_lengths %>%
+  count(word_length, sort = TRUE) %>%
+  ggplot(aes(word_length), 
+         binwidth = 10) + 
+    geom_histogram(aes(fill = ..count..),
+                   breaks = seq(1,25, by = 2), 
+                   show.legend = FALSE) + 
+    xlab("Word Length") + 
+    ylab("Word Count") +
+    ggtitle("Word Length Distribution") +
+    theme(plot.title = element_text(hjust = 0.5))
+```
+As expected, as the length of the word increases, the count decreases. Shorter words accounts for more of tweets than longer words in the dataset
+
+```{r}
+# Word cloud based on word length
+wc <- Airline_tweets_lengths %>%
+  ungroup() %>%
+  select(word, word_length) %>%
+  distinct() %>%
+  arrange(desc(word_length))
+
+wordcloud2(wc[1:100, ], 
+           size = .15,
+           minSize = .0005,
+           ellipticity = .3, 
+           rotateRatio = 1, 
+           fontWeight = "bold")
+```
+The size of the words in the word cloud is dependent on its length. I observed that the longer words were usually hashtags# used in tweets. When using hash tags on twitter,there are no spaces between words.
+
+
+Lexical density is the number of unique words divided by the total number of words (word repetition).This is an indicator of word repetition. As lexical density increases, repetition decreases.
+```{r}
+#Lexical density for united airline
+lex_density_per_day <- Airline %>%
+  filter(airline == "United") %>% 
+  mutate(day = format(as.POSIXct(tweet_time, format = "%y/%m/%d %H:%M:%S"), "%d")) %>% 
+  filter(day != "NA") %>%
+  unnest_tokens(word, tweets) %>%
+  group_by(airline,day) %>%
+  summarise(lex_density = n_distinct(word)/n()) %>%
+  arrange(desc(lex_density))
+lex_density_per_day
+```
+
+
+```{r}
+#Lexical density plot for united airline
+density_plot <- lex_density_per_day %>%
+  ggplot(aes(day, lex_density)) + 
+    geom_point(color = my_colors[1],
+               alpha = .4, 
+               size = 4, 
+               position = "jitter") + 
+    ggtitle("United Airline Lexical Density") + 
+    xlab("Day") + 
+    ylab("lex density value") +
+    scale_color_manual(values = my_colors) +
+    theme_classic() + 
+    theme(plot.title = element_text(hjust = 0.5))
+
+density_plot
+```
+The lexical density starts off high then it decreased for 5 days then increased.
+
+```{r}
+#Lexical density for Virgin America airline
+lex_density_per_day1 <- Airline %>%
+  filter(airline == "Virgin America") %>% 
+  mutate(day = format(as.POSIXct(tweet_time, format = "%y/%m/%d %H:%M:%S"), "%d")) %>% 
+  filter(day != "NA") %>%
+  unnest_tokens(word, tweets) %>%
+  group_by(airline,day) %>%
+  summarise(lex_density = n_distinct(word)/n()) %>%
+  arrange(desc(lex_density))
+lex_density_per_day1
+```
+```{r}
+#Lexical density plot for virgin america  airline
+density_plot1 <- lex_density_per_day1 %>%
+  ggplot(aes(day, lex_density)) + 
+    geom_point(color = my_colors[2],
+               alpha = .4, 
+               size = 4, 
+               position = "jitter") + 
+    ggtitle("Virgin America Airline Lexical Density") + 
+    xlab("Day") + 
+    ylab("lex density value") +
+    scale_color_manual(values = my_colors) +
+    theme_classic() + 
+    theme(plot.title = element_text(hjust = 0.5))
+
+density_plot1
+```
+
+Lexical Diversity: number of unique words used in a text.  The more varied a vocabulary a text possesses, the higher its lexical diversity
+```{r}
+# Lexical Diversity for United airline
+lex_diversity_per_day <- Airline %>%
+  filter(airline == 'United') %>% 
+  mutate(day = format(as.POSIXct(tweet_time, format = "%y/%m/%d %H:%M:%S"), "%d")) %>%
+  filter(day != "NA") %>%
+  unnest_tokens(word, tweets) %>%
+  group_by(airline,day) %>%
+  summarise(lex_diversity = n_distinct(word)) %>%
+  arrange(desc(lex_diversity))
+lex_diversity_per_day
+```
+
+
+```{r}
+# Lexical Diversity plot for United airline
+diversity_plot <- lex_diversity_per_day %>%
+  ggplot(aes(day, lex_diversity)) +
+    geom_point(color = my_colors[3],
+               alpha = .4, 
+               size = 4, 
+               position = "jitter") + 
+    ggtitle("United Airline Lexical Diversity") +
+    xlab("Day") + 
+    ylab("Lexical Diversity Value") +
+    scale_color_manual(values = my_colors) +
+    theme(plot.title = element_text(hjust = 0.5))
+diversity_plot
+```
+```{r}
+# Lexical Diversity for Virgin America airline
+lex_diversity_per_day1 <- Airline %>%
+  filter(airline == 'Virgin America') %>% 
+  mutate(day = format(as.POSIXct(tweet_time, format = "%y/%m/%d %H:%M:%S"), "%d")) %>%
+  filter(day != "NA") %>%
+  unnest_tokens(word, tweets) %>%
+  group_by(airline,day) %>%
+  summarise(lex_diversity = n_distinct(word)) %>%
+  arrange(desc(lex_diversity))
+lex_diversity_per_day1
+```
+```{r}
+# Lexical Diversity plot for United airline
+diversity_plot1 <- lex_diversity_per_day1 %>%
+  ggplot(aes(day, lex_diversity)) +
+    geom_point(color = my_colors[4],
+               alpha = .4, 
+               size = 4, 
+               position = "jitter") + 
+    ggtitle("Virgin America Airline Lexical Diversity") +
+    xlab("Day") + 
+    ylab("Lexical Diversity Value") +
+    scale_color_manual(values = my_colors) +
+    theme(plot.title = element_text(hjust = 0.5))
+diversity_plot1
+```
+              
+              
+                                                                     Sentiment Analysis(TASKB)
+                                                                     
+```{r}
+# Rename the  given sentiment
+colnames(Airline)[3] <- 'original_sentiment'
+Airline
+```
+The sentiment column is renamed so as to differnciate it from the sentiment achieved after analysis
+
+```{r}
+#bing sentiment dataset
+bing_sentiment <-
+  Airline %>%
+  unnest_tokens(word, tweets) %>%
+  anti_join(stop_words) %>%
+  filter(!word %in% undesirable_words) %>% 
+  inner_join(get_sentiments('bing'))
+bing_sentiment
+```
+
+```{r}
+# sentiment of words in each tweet 
+bing_sentiment %>% 
+  count(word,original_sentiment,sentiment,tweet_id,sort = TRUE) %>%
+  top_n(10) -> bing_sentiment_count
+bing_sentiment_count
+```
+The sentiment can be compared with the original_sentiment to see matches and non-matches
+
+
+```{r}
+#Bing sentiment for tweets in the dataset showing the top 10 positve and negative words 
+bing_sentiment %>% 
+  count(word,sentiment,sort = TRUE) %>%
+  group_by(sentiment) %>% 
+  top_n(10) %>% 
+  ungroup() %>% 
+  mutate(word_ordered = reorder(word,n)) -> bing_sentiment_plot
+bing_sentiment_plot
+# Bing sentiment plot for tweets in the dataset showing the top 10 positve and negative words
+ggplot(bing_sentiment_plot,aes(x = word_ordered, y = n, fill = sentiment )) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free") +
+  coord_flip()
+```
+
+
+```{r}
+#PLot bing sentiment for United  airline
+bing_plot <- bing_sentiment %>%
+  group_by(sentiment, airline) %>%
+  filter(airline == "United") %>%
+  summarise(word_count = n()) %>%
+  ungroup() %>%
+  mutate(sentiment = reorder(sentiment, word_count)) %>%
+  ggplot(aes(sentiment, word_count, fill = sentiment)) +
+  geom_col() +
+  guides(fill = FALSE) +
+  labs(x = NULL, y = "Word Count") +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("United Airline Sentiment") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  coord_flip()
+bing_plot
+```
+There are more negative sentiment words for United Airline than positive
+
+```{r}
+#PLot bing sentiment for Virgin America airline
+bing_plot1 <- bing_sentiment %>%
+  group_by(sentiment, airline) %>%
+  filter(airline == "Virgin America") %>%
+  summarise(word_count = n()) %>%
+  ungroup() %>%
+  mutate(sentiment = reorder(sentiment, word_count)) %>%
+  ggplot(aes(sentiment, word_count, fill = sentiment)) +
+  geom_col() +
+  guides(fill = FALSE) +
+  labs(x = NULL, y = "Word Count") +
+  scale_y_continuous(limits = c(0, 200)) +
+  ggtitle("Virgin America Airline Sentiment") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  coord_flip()
+bing_plot1
+```
+There are more postive sentiment words for Virgin America than negative sentiment words
+
+
+```{r}
+# Sentiment Polarity by each airline
+bing_sentiment %>% 
+  count(airline,sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  mutate(sentiment = positive - negative) -> bing_sentiment_overall
+bing_sentiment_overall
+```
+```{r}
+# bing sentiment polarity by airline
+ggplot(bing_sentiment_overall,
+  aes(x = airline, y = sentiment, fill = airline)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  ggtitle("Overall Sentiment Analysis") +
+  xlab("Airline") + 
+  ylab("Sentiment") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+The figure above shows that virgin america airline has a more positve sentiment from its cutomers than United airline but this is not a fair comaprison as there are more tweet observations for united airline than for virgin america airline.
+
+
+```{r}
+# bing sentiment overtime(day) plot
+bing_sentiment_overtime <- Airline %>%
+  unnest_tokens(word, tweets) %>%
+  anti_join(stop_words) %>%
+  filter(!word %in% undesirable_words) %>%
+  inner_join(get_sentiments('bing')) %>% 
+  mutate(day = format(as.POSIXct(tweet_time, format = "%y/%m/%d %H:%M:%S"), "%d")) %>%
+  filter(day != "NA")
+
+bing_sentiment_overtime %>% 
+  count(airline,sentiment,day) %>% 
+  spread(sentiment, n) %>% 
+  mutate(sentiment = positive - negative) -> byday
+byday %>% 
+  ggplot(aes(x = as.numeric(day), y = sentiment)) + 
+  geom_point(aes(color = airline)) + 
+  ggtitle("Daily Polarity Trend") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_smooth(method = "auto")
+```
+The figure above displays the daily bing sentiment for both airlines. The trend descends gradually from the 17th up until the 22nd of Febuary and then it started increasing from the 23rd to 24th of Febuary.
+
+```{r}
+# given sentiment overtime(day) plot
+given_sentiment_overtime <- Airline %>%
+  unnest_tokens(word, tweets) %>%
+  anti_join(stop_words) %>%
+  filter(!word %in% undesirable_words) %>%
+  mutate(day = format(as.POSIXct(tweet_time, format = "%y/%m/%d %H:%M:%S"), "%d")) %>%
+  filter(day != "NA")
+given_sentiment_overtime %>% 
+  count(airline,original_sentiment,day) %>% 
+  spread(original_sentiment, n) %>% 
+  mutate(original_sentiment = positive - negative) -> byday1
+byday1 %>% 
+ggplot(aes(x = as.numeric(day), y = original_sentiment)) + 
+  geom_point(aes(color = airline)) +
+  ggtitle("Daily Polarity Trend") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_smooth(method = "auto")
+```
+The figure above displays the daily given sentiment for both airlines. The trend descends gradually from the 17th up until the 22nd of Febuary and then it started increasing from the 23rd to 24th of Febuary.
+
+```{r}
+# Another Visualisation indicating the bing sentiment polarity overtime(day)
+tweet_polarity_day <- bing_sentiment %>%
+  mutate(day = format(as.POSIXct(tweet_time, format = "%y/%m/%d %H:%M:%S"), "%d")) %>%
+  filter(day != "NA") %>%
+  count(sentiment, day) %>%
+  spread(sentiment, n) %>%
+  mutate(polarity = positive - negative)
+
+polarity_over_time <- tweet_polarity_day %>%
+  ggplot(aes(day, polarity, fill = polarity)) +
+  geom_col(show.legend = FALSE) +
+  geom_smooth(method = "loess", se = FALSE) +
+  geom_smooth(method = "lm", se = FALSE, aes(color = my_colors[1])) +
+  theme(plot.title = element_text(size = 11)) +
+  xlab(NULL) + ylab(NULL) +
+  ggtitle("Polarity Over Time") + 
+  theme(plot.title = element_text(hjust = 0.5))
+polarity_over_time
+```
+
+```{r}
+#NRC sentiment dataset
+nrc_sentiment <-
+  Airline %>%
+  unnest_tokens(word, tweets) %>%
+  anti_join(stop_words) %>%
+  filter(!word %in% undesirable_words) %>%
+  inner_join(get_sentiments('nrc'))
+nrc_sentiment
+```
+```{r}
+#NRC entiment dataset without postive and negative sentiment
+airline_nrc_sub <- Airline %>%
+  unnest_tokens(word, tweets) %>%
+  anti_join(stop_words) %>%
+  filter(!word %in% undesirable_words) %>% 
+  mutate(day = format(as.POSIXct(tweet_time, format = "%y/%m/%d %H:%M:%S"), "%d")) %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(!sentiment %in% c("positive", "negative"))
+airline_nrc_sub
+```
+```{r}
+#Get the count of words per sentiment per day
+day_sentiment_nrc <- airline_nrc_sub %>%
+  group_by(day, sentiment) %>%
+  count(day, sentiment) %>%
+  select(day, sentiment, sentiment_day_count = n)
+#Get the total count of sentiment words per day (not distinct)
+total_sentiment_day <- airline_nrc_sub %>%
+  count(day) %>%
+  select(day, day_total = n)
+#Join the two and create a percent field
+day_radar_chart <- day_sentiment_nrc %>%
+  inner_join(total_sentiment_day, by = "day") %>%
+  filter(day != "NA") %>% 
+  mutate(percent = sentiment_day_count / day_total * 100 ) %>%
+  filter(day %in% c("18","19", "20")) %>%
+  select(-sentiment_day_count, -day_total) %>%
+  spread(day, percent) %>%
+  chartJSRadar(showToolTipLabel = TRUE,
+               main = "NRC Day Radar")
+day_radar_chart
+```
+The figure above is a NRC sentiment radar chart of tweets for 3 days 
+
+```{r}
+#Get the count of words per sentiment per day
+day_sentiment_nrc1 <- airline_nrc_sub %>%
+  filter(airline == "United") %>% 
+  group_by(day, sentiment) %>%
+  count(day, sentiment) %>%
+  select(day, sentiment, sentiment_day_count = n)
+
+#Get the total count of sentiment words per day (not distinct)
+total_sentiment_day1 <- airline_nrc_sub %>%
+  count(day) %>%
+  select(day, day_total = n)
+#Join the two and create a percent field
+day_radar_chart1 <- day_sentiment_nrc1 %>%
+  inner_join(total_sentiment_day1, by = "day") %>%
+  filter(day != "NA") %>%
+  mutate(percent = sentiment_day_count / day_total * 100 ) %>%
+  filter(day %in% c("18","19", "20")) %>%
+  select(-sentiment_day_count, -day_total) %>%
+  spread(day, percent) %>%
+  chartJSRadar(showToolTipLabel = TRUE,
+               main = " United Airline NRC Day Radar")
+day_radar_chart1
+```
+The figure above is a NRC sentiment radar chart of tweets for United Airline for 3 days 
+
+```{r}
+#Get the count of words per sentiment per day
+day_sentiment_nrc2 <- airline_nrc_sub %>%
+  filter(airline == "Virgin America") %>% 
+  group_by(day, sentiment) %>%
+  count(day, sentiment) %>%
+  select(day, sentiment, sentiment_day_count = n)
+
+#Get the total count of sentiment words per day (not distinct)
+total_sentiment_day2 <- airline_nrc_sub %>%
+  count(day) %>%
+  select(day, day_total = n)
+#Join the two and create a percent field
+day_radar_chart2 <- day_sentiment_nrc2 %>%
+  inner_join(total_sentiment_day2, by = "day") %>%
+  filter(day != "NA") %>%
+  mutate(percent = sentiment_day_count / day_total * 100 ) %>%
+  filter(day %in% c("18","19", "20")) %>%
+  select(-sentiment_day_count, -day_total) %>%
+  spread(day, percent) %>%
+  chartJSRadar(showToolTipLabel = TRUE,
+               main = "Virgin America Airline NRC Day Radar")
+day_radar_chart2
+```
+The figure above is a NRC sentiment radar chart of tweets for United Airline for 3 days 
+
+
+```{r}
+#NRC sentiment for top 10 frequent words
+nrc_sentiment %>% 
+  count(word,sentiment,sort = TRUE) %>%
+  group_by(sentiment) %>% 
+  top_n(10) %>% 
+  ungroup() %>% 
+  mutate(word_ordered = reorder(word,n)) -> nrc_sentiment_plot
+nrc_sentiment_plot
+```
+
+```{r}
+#NRC sentiment plot for top 10 frequent words
+ggplot(nrc_sentiment_plot,aes(x = word_ordered, y = n, fill = sentiment )) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free") +
+  coord_flip()
+```
+
+```{r}
+#United Airline nrc sentiment word count for each category
+nrc_plot <- nrc_sentiment %>%
+  group_by(sentiment, airline) %>%
+  filter(airline == "United") %>% 
+  summarise(word_count = n()) %>%
+  ungroup() %>%
+  mutate(sentiment = reorder(sentiment, word_count)) %>%
+ 
+#United Airline nrc sentiment word count plot for each category
+  #Use `fill = -word_count` to make the larger bars darker
+  ggplot(aes(sentiment, word_count, fill = -word_count)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "Word Count") +
+  scale_y_continuous(limits = c(0, 2000)) + # axis limit
+  ggtitle("United Airline NRC Sentiment") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  coord_flip()
+nrc_plot
+```
+
+
+```{r}
+#Virgin America Airline nrc sentiment word count for each category
+nrc_plot2 <- nrc_sentiment %>%
+  group_by(sentiment, airline) %>%
+  filter(airline == "Virgin America") %>% 
+  summarise(word_count = n()) %>%
+  ungroup() %>%
+  mutate(sentiment = reorder(sentiment, word_count)) %>%
+  
+#Virgin America Airline nrc sentiment word count plot for each category
+  #Use `fill = -word_count` to make the larger bars darker
+  ggplot(aes(sentiment, word_count, fill = -word_count)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "Word Count") +
+  scale_y_continuous(limits = c(0,300)) + #Hard code the axis limit
+  ggtitle("Virgin America Airline NRC Sentiment") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  coord_flip()
+nrc_plot2
+```
+
+```{r}
+# Identify the most common Anger words for United Airline
+nrc_anger <- nrc_sentiment %>%
+  select(word,sentiment,airline) %>% 
+  filter(sentiment == "anger") %>% 
+  filter(airline == "United") %>% 
+  count(word, sort = TRUE)
+nrc_anger
+```
+
+```{r}
+# Identify the most common joy words for Virgin America Airline
+nrc_joy <- nrc_sentiment %>%
+  select(word,sentiment,airline) %>% 
+  filter(sentiment == "joy") %>% 
+  filter(airline == "Virgin America") %>% 
+  count(word, sort = TRUE)
+nrc_joy
+```
+
+```{r}
+#nrc sentiment categories count by airline
+nrc_sentiment %>% 
+  count(airline,sentiment) %>% 
+  spread(sentiment, n, fill = 0) -> nrc_sentiment_overall
+nrc_sentiment_overall
+```
+
+                                                             Sentiment Analysis & Further exploration(Task D)
+```{r}
+#given sentiment and bing sentiment where sentiment is the same 
+given_sentiment <-
+  Airline %>%
+  unnest_tokens(word, tweets) %>%
+  anti_join(stop_words) %>%
+  filter(!word %in% undesirable_words) %>% 
+  count(word, original_sentiment, tweet_id, sort = TRUE)
+
+airline_bing <- Airline %>%
+  unnest_tokens(word, tweets) %>%
+  anti_join(stop_words) %>%
+  filter(!word %in% undesirable_words) %>% 
+  inner_join(get_sentiments('bing')) %>% 
+  count(word, sentiment, tweet_id, sort = TRUE)
+
+givenbing_vs_airlinebing <- inner_join(given_sentiment, airline_bing, by = c("word", "tweet_id"))
+givenbing_vs_airlinebing
+```
+The dataframe above displays the words were the original sentiment given in the dataset matches the bing sentiment
+
+```{r}
+##given sentiment and bing sentiment where sentiment is the same 
+sentiment_compared <- givenbing_vs_airlinebing %>% filter(original_sentiment != sentiment)
+sentiment_compared
+```
+The dataframe above displays the words were the original sentiment given in the dataset does not match the bing sentiment
+
+                                                                            
+                                                                            Topic Modelling
+
+```{r}
+#create a Document Term Matrix(DTM) with ID as rows and words as columns
+Airline_tm <- Airline %>%
+  mutate(ID  = row_number()) %>% 
+  unnest_tokens(word, tweets) %>%
+  anti_join(stop_words) %>%
+  filter(!word %in% undesirable_words) %>%
+  count(word,ID) %>% 
+  cast_dtm(ID,word,n)
+#examine the structure of the DTM
+Airline_tm
+```
+This tells you how many documents and terms you have and that this is a very sparse matrix. The word sparse implies that the DTM contains mostly empty fields
+
+```{r}
+#look at 4 documents and 8 words of the DTM
+inspect(Airline_tm[1:4,1:8])
+```
+
+```{r}
+#We can use the LDA() function from the topicmodels package, setting k = 2, 
+#to create a two-topic LDA model.
+# set a seed so that the output of the model is predictable
+#use VEM method
+Airline_lda <- LDA(Airline_tm, k = 2,method = "VEM",control = list(seed = 1234))
+Airline_lda
+```
+
+```{r}
+# extracting the per-topic-per-word probabilities, called "beta", from the model.
+Airline_topics <- tidy(Airline_lda, matrix = "beta")
+Airline_topics
+```
+beta is the probabibility of words belonging to a particular topic
+
+```{r}
+#Examine most common terms in each topic
+Airline_top_terms <- Airline_topics %>%
+  group_by(topic) %>%
+  top_n(15, beta) %>%
+  ungroup() %>%
+  mutate(term2 = reorder(term,beta))
+Airline_top_terms
+```
+
+
+```{r}
+#Plot Common Terms
+Airline_top_terms %>%
+  ggplot(aes(term2, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() 
+```
+I found it difficult to come up with the appropriate topic name so I utilised a different method to fit the model
+
+```{r}
+#We can use the LDA() function with the Gibbs Method from the topicmodels package, setting k = 2, 
+#to create a two-topic LDA model.
+# set a seed so that the output of the model is predictable
+Airline_lda2 <- LDA(Airline_tm, k = 2, method = 'GIBBS',control = list(seed = 1234))
+Airline_lda2
+```
+
+
+```{r}
+# extracting the per-topic-per-word probabilities, called "beta", from the model.
+Airline_topics2 <- tidy(Airline_lda2, matrix = "beta")
+Airline_topics2
+```
+```{r}
+#Examine most common terms in each topic
+Airline_top_terms2 <- Airline_topics2 %>%
+  group_by(topic) %>%
+  top_n(15, beta) %>%
+  ungroup() %>%
+  mutate(term2 = reorder(term,beta))
+
+#Plot Common Terms
+Airline_top_terms2 %>%
+  ggplot(aes(term2, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() 
+```
+Topic 1 name = Customer service
+Topic 2 name = Customer flight experience
+```{r}
+#As an alternative, we could consider the terms that had the greatest difference in beta between topic 1 and topic 2
+beta_spread <- Airline_topics2 %>%
+  mutate(topic = paste0("topic", topic)) %>%
+  spread(topic, beta) %>%
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic2 / topic1))
+beta_spread
+```
+```{r}
+#Examine top 10 beta scores
+beta_top_terms <- beta_spread %>%
+  top_n(10, log_ratio) 
+
+beta_top_terms %>%
+  ggplot(aes(term, log_ratio)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() 
+```
+The figure above display words that are strongly associated with topic 2
+
+```{r}
+beta_spread <- Airline_topics2 %>%
+  mutate(topic = paste0("topic", topic)) %>%
+  spread(topic, beta) %>%
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic1 / topic2))
+
+#Examine top 10 beta scores
+beta_top_terms <- beta_spread %>%
+  top_n(10, log_ratio) 
+
+beta_top_terms %>%
+  ggplot(aes(term, log_ratio)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip()
+```
+The figure above display words that are strongly associated with topic 1
+
+```{r}
+Airline_lda3 <- LDA(Airline_tm, k = 3,method = "GIBBS",control = list(seed = 1234))
+Airline_lda3
+```
+
+```{r}
+# extracting the per-topic-per-word probabilities, called "beta", from the model.
+Airline_topics3 <- tidy(Airline_lda3, matrix = "beta")
+Airline_topics3
+```
+```{r}
+#Examine most common terms in each topic
+Airline_top_terms3 <- Airline_topics3 %>%
+  group_by(topic) %>%
+  top_n(15, beta) %>%
+  ungroup() %>%
+  mutate(term2 = reorder(term,beta))
+
+#Plot Common Terms
+Airline_top_terms3 %>%
+  ggplot(aes(term2, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() 
+```
+Topic1 name = flight details
+Topic2 name = Customer service support
+Topic3 name = Customer flight experience
+
+
+
+                                                                    Further exploration- Tak D
+
+```{r}
+#Tweet Users location & count
+location <- Airline %>% 
+  count(user_timezone) %>% 
+  top_n(30) %>%
+  mutate(user_timezone1 = reorder(user_timezone, n)) %>%
+  arrange(desc(n))
+location
+```
+
+
+```{r}
+#Tweet Users location plot count
+ggplot(location, aes(x = user_timezone1, y = n, fill = user_timezone1)) +
+  geom_col(show.legend = FALSE) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("") + 
+    ylab("Count") +
+    ggtitle("Airline Tweets Locations") +
+  coord_flip()
+```
+```{r}
+#United Airline Tweet Users location plot count
+united_location <- Airline %>%
+  filter(airline == "United") %>% 
+  count(user_timezone) %>% 
+  filter(n > 1) %>%
+  mutate(user_timezone1 = reorder(user_timezone, n)) %>%
+  arrange(desc(n))
+united_location
+
+ggplot(united_location, aes(x = user_timezone1, y = n, fill = user_timezone1)) +
+  geom_col(show.legend = FALSE) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("") + 
+    ylab("Count") +
+    ggtitle("United Airline Tweets Locations") +
+  coord_flip()
+```
+
+```{r}
+#Virgin America Airline Tweet Users location plot count
+virgin_location <- Airline %>%
+  filter(airline == "Virgin America") %>% 
+  count(user_timezone) %>%
+  filter(n > 1) %>% 
+  mutate(user_timezone1 = reorder(user_timezone, n)) %>%
+  arrange(desc(n))
+virgin_location
+ggplot(virgin_location, aes(x = user_timezone1, y = n, fill = user_timezone1)) +
+  geom_col(show.legend = FALSE) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("") + 
+    ylab("Count") +
+    ggtitle("Virgin America Airline Tweets Locations") +
+  coord_flip()
+```
+
+```{r}
+#Tweet polarity by Tweet user locations plot
+bing_location <- bing_sentiment %>% 
+  count(user_timezone,sentiment) %>% 
+  spread(sentiment, n) %>%
+  mutate(polarity = positive - negative) %>%
+  arrange(desc(polarity)) %>% 
+  na.omit()
+bing_location
+ggplot(bing_location, aes(x = user_timezone, y = polarity, fill = polarity)) +
+  geom_col(show.legend = TRUE) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("") + 
+    ylab("polarity") +
+    ggtitle("Overall Sentiment by Tweets Locations") +
+  coord_flip()
+```
+
+```{r}
+#United Airline Tweet polarity by Tweet user locations plot
+united_bing_location <- bing_sentiment %>%
+  filter(airline == "United") %>% 
+  count(user_timezone,sentiment,airline) %>% 
+  spread(sentiment, n) %>%
+  mutate(polarity = positive - negative) %>%
+  arrange(desc(polarity)) %>% 
+  na.omit()
+united_bing_location
+ggplot(united_bing_location, aes(x = user_timezone, y = polarity, fill = polarity)) +
+  geom_col(show.legend = TRUE) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("") + 
+    ylab("polarity") +
+    ggtitle("United Airline Sentiment by Tweets Locations") +
+  coord_flip()
+```
+
+```{r}
+#Virgin America Airline Tweet polarity by Tweet user locations plot
+virgin_bing_location <- bing_sentiment %>%
+  filter(airline == "Virgin America") %>% 
+  count(user_timezone,sentiment,airline) %>% 
+  spread(sentiment, n) %>%
+  mutate(polarity = positive - negative) %>%
+  arrange(desc(polarity)) %>% 
+  na.omit()
+virgin_bing_location
+ggplot(virgin_bing_location, aes(x = user_timezone, y = polarity, fill = polarity)) +
+  geom_col(show.legend = TRUE) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("") + 
+    ylab("polarity") +
+    ggtitle("Virgin America Airline Sentiment by Tweets Locations") +
+  coord_flip()
+```
+
+```{r}
+#retweet_count count by airline
+retweet_count <- Airline %>% 
+  group_by(airline) %>% 
+  count(retweet_count) %>% 
+  na.omit() %>% 
+  arrange(desc(retweet_count))
+retweet_count
+```
+```{r}
+#retweet_count count by airline plot
+ggplot(retweet_count, aes(x = retweet_count, y = n, fill = airline)) +
+  geom_col(show.legend = TRUE) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("retweet_count") + 
+    ylab("count") +
+    ggtitle("Retweet Count by Airline") +
+  coord_flip()
+```
+
+
+
+
+
+
+
+
+
